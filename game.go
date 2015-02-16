@@ -2,18 +2,21 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 )
 
 type Game struct {
-	deck    []Card
-	topCard int
-	clocks  int
-	fuses   int
-	piles   map[string]int
-	turn    []chan bool
-	players []*Player
-	result  chan bool
+	deck       []Card
+	topCard    int
+	clocks     int
+	fuses      int
+	piles      map[string]int
+	turn       int
+	startTurn  []chan bool
+	turnAction chan *Action
+	players    []*Player
+	result     chan bool
 }
 
 type Card int
@@ -26,12 +29,28 @@ func (c Card) Number() int {
 	return []int{1, 1, 1, 2, 2, 3, 3, 4, 4, 5}[c%10]
 }
 
-type Action int
+func (c Card) String() string {
+	return fmt.Sprintf("%d%s", c.Number(), c.Color())
+}
+
+type ActionType int
 
 const (
-	Play Action = iota
+	Play ActionType = iota
 	Discard
+	Inform
 )
+
+type Action struct {
+	t ActionType
+	c Card
+	i Information
+}
+
+type Information struct {
+	characteristic string
+	positions      []int
+}
 
 func NewGame(seed int64) *Game {
 	// create game
@@ -54,8 +73,10 @@ func NewGame(seed int64) *Game {
 
 	// initialize players
 	g.players = make([]*Player, 5)
-	g.turn = make([]chan bool, 5)
+	g.startTurn = make([]chan bool, 5)
+	g.turnAction = make(chan *Action)
 	for i := range g.players {
+		g.startTurn[i] = make(chan bool)
 		g.players[i] = &Player{
 			g,
 			make([]Card, 0, 4),
@@ -64,8 +85,8 @@ func NewGame(seed int64) *Game {
 				a   Action
 				pos int
 			}, 0, 4),
-			g.turn[i],
-			g.turn[(i+1)%5],
+			g.startTurn[i],
+			g.turnAction,
 		}
 	}
 
@@ -93,15 +114,58 @@ func (g *Game) Draw() (c Card, err error) {
 }
 
 func (g *Game) Play(c Card) {
+	// check if it's playable
 	if g.piles[c.Color()] == c.Number()-1 {
 		g.piles[c.Color()] = c.Number()
+		// bonus clock for playing a 5
 		if c.Number() == 5 {
 			g.clocks++
 		}
+		all5 := true
+		for _, n := range g.piles {
+			all5 = all5 && (n == 5)
+		}
+		// you win!
+		if all5 {
+			g.result <- true
+		}
 	} else {
 		g.fuses--
+		// game over!
 		if g.fuses == 0 {
 			g.result <- false
 		}
 	}
+}
+
+func (g *Game) String() string {
+	r := ""
+	score := 0
+	for c, n := range g.piles {
+		r += fmt.Sprintf("%d%s ", n, c)
+		score += n
+	}
+	r += fmt.Sprintf(" score: %d  clocks: %d  fuses: %d\n", score, g.clocks, g.fuses)
+	for i := range g.deck {
+		if i == g.topCard {
+			r += "|"
+		} else {
+			r += " "
+		}
+		r += g.deck[i].String()
+		if i%10 == 9 {
+			r += "\n"
+		}
+	}
+
+	for i, p := range g.players {
+		if i == g.turn {
+			r += "> "
+		} else {
+			r += "  "
+		}
+		r += fmt.Sprintf("Player %d, %s\n", i, p.String())
+
+	}
+	return r
 }
