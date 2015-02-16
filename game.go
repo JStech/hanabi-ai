@@ -13,10 +13,9 @@ type Game struct {
 	fuses      int
 	piles      map[string]int
 	turn       int
-	startTurn  []chan bool
+	tableTalk  []chan *Information
 	turnAction chan *Action
 	players    []*Player
-	result     chan bool
 }
 
 type Card int
@@ -44,12 +43,39 @@ const (
 type Action struct {
 	t ActionType
 	c Card
-	i Information
+	p int
+	i *Information
+}
+
+func (a *Action) String() string {
+	r := ""
+	switch a.t {
+	case Play:
+		r += "Play " + a.c.String()
+		r += fmt.Sprintf(" %d", a.p)
+	case Discard:
+		r += "Discard " + a.c.String()
+		r += fmt.Sprintf(" %d", a.p)
+	case Inform:
+		r += "Tell " + a.i.String()
+	}
+	return r
 }
 
 type Information struct {
-	characteristic string
+	from           int
+	to             int
+	characteristic interface{}
 	positions      []int
+}
+
+func (info *Information) String() string {
+	r := fmt.Sprintf("Player %d, %v at", info.to,
+		info.characteristic)
+	for _, p := range info.positions {
+		r += fmt.Sprintf(" %d,", p)
+	}
+	return r
 }
 
 func NewGame(seed int64) *Game {
@@ -71,33 +97,30 @@ func NewGame(seed int64) *Game {
 	g.clocks = 8
 	g.fuses = 3
 
+	// initialize piles
+	g.piles = make(map[string]int)
+
 	// initialize players
 	g.players = make([]*Player, 5)
-	g.startTurn = make([]chan bool, 5)
+	g.tableTalk = make([]chan *Information, 5)
 	g.turnAction = make(chan *Action)
 	for i := range g.players {
-		g.startTurn[i] = make(chan bool)
+		g.tableTalk[i] = make(chan *Information)
 		g.players[i] = &Player{
 			g,
+			i,
 			make([]Card, 0, 4),
 			make([][]Card, 0, 4),
-			make([]struct {
-				a   Action
-				pos int
-			}, 0, 4),
-			g.startTurn[i],
+			make([]Action, 0, 4),
+			g.tableTalk[i],
 			g.turnAction,
 		}
 	}
 
-	// result channel
-	g.result = make(chan bool)
-
 	// deal cards
 	for i := 0; i < 4; i++ {
 		for _, p := range g.players {
-			p.Draw(g.deck[g.topCard])
-			g.topCard++
+			p.Draw()
 		}
 	}
 	return g
@@ -113,7 +136,7 @@ func (g *Game) Draw() (c Card, err error) {
 	return
 }
 
-func (g *Game) Play(c Card) {
+func (g *Game) Play(c Card) bool {
 	// check if it's playable
 	if g.piles[c.Color()] == c.Number()-1 {
 		g.piles[c.Color()] = c.Number()
@@ -127,15 +150,20 @@ func (g *Game) Play(c Card) {
 		}
 		// you win!
 		if all5 {
-			g.result <- true
+			return true
 		}
 	} else {
 		g.fuses--
 		// game over!
 		if g.fuses == 0 {
-			g.result <- false
+			return true
 		}
 	}
+	return false
+}
+
+func (g *Game) Discard(c Card) {
+	g.clocks++
 }
 
 func (g *Game) String() string {
@@ -145,7 +173,8 @@ func (g *Game) String() string {
 		r += fmt.Sprintf("%d%s ", n, c)
 		score += n
 	}
-	r += fmt.Sprintf(" score: %d  clocks: %d  fuses: %d\n", score, g.clocks, g.fuses)
+	r += fmt.Sprintf(" score: %d  clocks: %d  fuses: %d\n", score, g.clocks,
+		g.fuses)
 	for i := range g.deck {
 		if i == g.topCard {
 			r += "|"
@@ -168,4 +197,34 @@ func (g *Game) String() string {
 
 	}
 	return r
+}
+
+func (g *Game) Start() {
+	for _, p := range g.players {
+		go p.Play()
+	}
+	for g.topCard < 50 {
+		g.tableTalk[g.turn] <- &Information{0, 0, true, nil}
+		a := <-g.turnAction
+		fmt.Println(g.turn, a)
+		fmt.Println(g)
+		switch a.t {
+		case Play:
+			over := g.Play(a.c)
+			if over {
+				fmt.Println("Game over")
+				fmt.Println(g)
+				return
+			}
+		case Discard:
+			g.Discard(a.c)
+		case Inform:
+			g.clocks--
+			for _, c := range g.tableTalk {
+				c <- a.i
+			}
+		}
+		g.turn++
+		g.turn %= 5
+	}
 }

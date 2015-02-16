@@ -1,30 +1,147 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 )
 
 type Player struct {
-	game      *Game
-	hand      []Card
-	knowledge [][]Card
-	plan      []struct {
-		a   Action
-		pos int
-	}
-	startTurn  chan bool
+	game       *Game
+	position   int
+	hand       []Card
+	knowledge  [][]Card
+	plan       []Action
+	tableTalk  chan *Information
 	turnAction chan *Action
 }
 
-func (p *Player) Draw(c Card) {
-	p.hand = append(p.hand, c)
-	p.knowledge = append(p.knowledge, make([]Card, 0))
+func (p *Player) Draw() {
+	c, err := p.game.Draw()
+	if err != nil {
+		// DO SOMETHING because the game's ending
+	} else {
+		p.hand = append(p.hand, c)
+		p.knowledge = append(p.knowledge, make([]Card, 0))
+	}
 }
 
 func (p *Player) Play() {
-	for _ = range p.startTurn {
-
-		p.turnAction <- new(Action)
+	g := p.game
+	for info := range p.tableTalk {
+		switch info.characteristic.(type) {
+		case int:
+			if info.from == p.position {
+				continue
+			}
+			// message: playable cards
+			if info.to == p.position {
+				// TODO: implement knowledge
+			}
+			relPos := (info.to - info.from + 5) % 5
+			cardPos := 0
+			playable := 0
+			for i := 1; i < 5; i++ {
+				if (info.from+i)%5 == p.position {
+					cardPos = i - 1
+					continue
+				}
+				c := g.players[(info.from+i)%5].hand[i-1]
+				if g.piles[c.Color()] == c.Number()-1 {
+					playable++
+				}
+			}
+			if playable == relPos-1 {
+				p.plan = append(p.plan, Action{Play, 0, cardPos, nil})
+			}
+		case string:
+			if info.from == p.position {
+				continue
+			}
+			// message: discardable cards
+			if info.to == p.position {
+				// TODO: implement knowledge
+			}
+			relPos := (info.to - info.from + 5) % 5
+			cardPos := 0
+			discardable := 0
+			for i := 1; i < 5; i++ {
+				if (info.from+i)%5 == p.position {
+					cardPos = i - 1
+					continue
+				}
+				c := g.players[(info.from+i)%5].hand[i-1]
+				if g.piles[c.Color()] >= c.Number() {
+					discardable++
+				}
+			}
+			if discardable == relPos-2 {
+				p.plan = append(p.plan, Action{Discard, 0, cardPos, nil})
+			}
+		case bool:
+			a := new(Action)
+			if len(p.plan) > 0 {
+				// execute the plan
+				action := p.plan[0]
+				p.plan = p.plan[1:]
+				a.t = action.t
+				a.c = p.hand[action.p]
+				p.hand = append(p.hand[:action.p], p.hand[action.p+1:]...)
+				p.knowledge = append(p.knowledge[:action.p],
+					p.knowledge[action.p+1:]...)
+				for i := range p.plan {
+					if p.plan[i].p > action.p {
+						p.plan[i].p--
+					}
+				}
+				p.Draw()
+			} else if g.clocks == 0 {
+				// nothing else to do
+				a.t = Discard
+				a.c = p.hand[0]
+				p.hand = p.hand[1:]
+				p.knowledge = p.knowledge[1:]
+				p.Draw()
+			} else {
+				a.t = Inform
+				a.i = &Information{p.position, 0, "", make([]int, 0)}
+				playable, discardable := 0, 0
+				for i := 1; i < 5; i++ {
+					c := g.players[(p.position+i)%5].hand[i-1]
+					if g.piles[c.Color()] >= c.Number() {
+						discardable++
+					} else if g.piles[c.Color()] == c.Number()-1 {
+						playable++
+					}
+				}
+				fmt.Println(p.position, "sees", playable, "playable and", discardable, "discardable")
+				// tell players about discardable cards
+				if g.clocks < 3 && discardable > 0 ||
+					discardable > playable+2 || playable == 0 {
+					if discardable == 4 {
+						discardable--
+					}
+					a.i.to = (p.position + discardable + 1) % 5
+					p := g.players[a.i.to]
+					a.i.characteristic = p.hand[0].Color()
+					for c := range p.hand {
+						if p.hand[c].Color() == a.i.characteristic {
+							a.i.positions = append(a.i.positions, c)
+						}
+					}
+				} else {
+					// tell players about playable cards
+					a.i.to = (p.position + playable) % 5
+					p := g.players[a.i.to]
+					a.i.characteristic = p.hand[0].Number()
+					for c := range p.hand {
+						if p.hand[c].Number() == a.i.characteristic {
+							a.i.positions = append(a.i.positions, c)
+						}
+					}
+				}
+			}
+			p.turnAction <- a
+		}
 	}
 }
 
@@ -32,6 +149,9 @@ func (p *Player) String() string {
 	r := make([]string, 0, len(p.hand))
 	for _, c := range p.hand {
 		r = append(r, c.String())
+	}
+	for _, p := range p.plan {
+		r = append(r, p.String())
 	}
 	return strings.Join(r, " ")
 }
