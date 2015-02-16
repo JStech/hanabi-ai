@@ -7,29 +7,16 @@ import (
 )
 
 type Game struct {
-	deck       []Card
+	deck       []*Card
 	topCard    int
 	clocks     int
 	fuses      int
-	piles      map[string]int
+	piles      map[Color]Number
 	turn       int
 	tableTalk  []chan *Information
+	turnChan   []chan bool
 	turnAction chan *Action
 	players    []*Player
-}
-
-type Card int
-
-func (c Card) Color() string {
-	return "rgybw"[c/10 : c/10+1]
-}
-
-func (c Card) Number() int {
-	return []int{1, 1, 1, 2, 2, 3, 3, 4, 4, 5}[c%10]
-}
-
-func (c Card) String() string {
-	return fmt.Sprintf("%d%s", c.Number(), c.Color())
 }
 
 type ActionType int
@@ -42,7 +29,7 @@ const (
 
 type Action struct {
 	t ActionType
-	c Card
+	c *Card
 	p int
 	i *Information
 }
@@ -83,9 +70,9 @@ func NewGame(seed int64) *Game {
 	g := new(Game)
 	// initialize and shuffle the deck
 	rand.Seed(seed)
-	g.deck = make([]Card, 50)
+	g.deck = make([]*Card, 50)
 	for i := 0; i < 50; i++ {
-		g.deck[i] = Card(i)
+		g.deck[i] = NewCard(i)
 	}
 	for i := 49; i > 0; i-- {
 		r := rand.Int31n(int32(i + 1))
@@ -98,7 +85,7 @@ func NewGame(seed int64) *Game {
 	g.fuses = 3
 
 	// initialize piles
-	g.piles = make(map[string]int)
+	g.piles = make(map[Color]Number)
 
 	// initialize players
 	g.players = make([]*Player, 5)
@@ -109,9 +96,10 @@ func NewGame(seed int64) *Game {
 		g.players[i] = &Player{
 			g,
 			i,
-			make([]Card, 0, 4),
-			make([][]Card, 0, 4),
-			make([]Action, 0, 4),
+			make([]*Card, 0, 4),
+			make([][]Characteristic, 0, 4),
+			make([]*Action, 0, 4),
+			make([]*Card, 0, 4),
 			g.tableTalk[i],
 			g.turnAction,
 		}
@@ -126,7 +114,7 @@ func NewGame(seed int64) *Game {
 	return g
 }
 
-func (g *Game) Draw() (c Card, err error) {
+func (g *Game) Draw() (c *Card, err error) {
 	if g.topCard >= 50 {
 		err = errors.New("Out of cards")
 		return
@@ -136,12 +124,12 @@ func (g *Game) Draw() (c Card, err error) {
 	return
 }
 
-func (g *Game) Play(c Card) bool {
+func (g *Game) Play(c *Card) bool {
 	// check if it's playable
-	if g.piles[c.Color()] == c.Number()-1 {
-		g.piles[c.Color()] = c.Number()
+	if g.piles[c.color] == c.number-1 {
+		g.piles[c.color] = c.number
 		// bonus clock for playing a 5
-		if c.Number() == 5 {
+		if c.number == 5 {
 			g.clocks++
 		}
 		all5 := true
@@ -162,7 +150,7 @@ func (g *Game) Play(c Card) bool {
 	return false
 }
 
-func (g *Game) Discard(c Card) {
+func (g *Game) Discard(c *Card) {
 	g.clocks++
 }
 
@@ -171,7 +159,7 @@ func (g *Game) String() string {
 	score := 0
 	for c, n := range g.piles {
 		r += fmt.Sprintf("%d%s ", n, c)
-		score += n
+		score += int(n)
 	}
 	r += fmt.Sprintf(" score: %d  clocks: %d  fuses: %d\n", score, g.clocks,
 		g.fuses)
